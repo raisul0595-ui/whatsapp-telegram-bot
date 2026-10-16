@@ -10,34 +10,76 @@ const TELEGRAM_CHAT_ID = '7512451863';
 const GREEN_API_INSTANCE = '710722717180';
 const GREEN_API_TOKEN = '19e72b9645c84018832f389d59c977241f149e7528404831b8';
 
-// ১. হোয়াটসঅ্যাপ থেকে ইনকামিং মেসেজ গ্রহণ (Green-API Webhook)
+// নির্দিষ্ট টার্গেট হোয়াটসঅ্যাপ নম্বর (Chat ID)
+const TARGET_CHAT_ID = '8801818877602@c.us';
+
+// ১. হোয়াটসঅ্যাপ থেকে ইনকামিং মেসেজ, ছবি, ভিডিও গ্রহণ (Green-API Webhook)
 app.post('/webhook', async (req, res) => {
     try {
         const body = req.body;
 
         if (body.typeWebhook === 'incomingMessageReceived') {
-            const senderName = body.senderData?.senderName || 'অজানা ব্যক্তি';
-            const senderPhone = body.senderData?.sender || '';
             const chatId = body.senderData?.chatId || '';
-            const messageData = body.messageData;
 
-            let textMessage = '';
+            // শুধু নির্দিষ্ট নম্বরের মেসেজ ফিল্টার করা
+            if (chatId === TARGET_CHAT_ID) {
+                const senderName = body.senderData?.senderName || 'টার্গেট চ্যাট';
+                const messageData = body.messageData;
+                const typeMessage = messageData?.typeMessage;
 
-            if (messageData.typeMessage === 'textMessage') {
-                textMessage = messageData.textMessageData?.textMessage || '';
-            } else if (messageData.typeMessage === 'extendedTextMessage') {
-                textMessage = messageData.extendedTextMessageData?.text || '';
-            } else {
-                textMessage = `[মিডিয়া/ফাইল: ${messageData.typeMessage}]`;
+                let textMessage = '';
+                let fileUrl = '';
+
+                // মেসেজের ধরন চেক করা (টেক্সট, ছবি, ভিডিও, ফাইল)
+                if (typeMessage === 'textMessage') {
+                    textMessage = messageData.textMessageData?.textMessage || '';
+                } else if (typeMessage === 'extendedTextMessage') {
+                    textMessage = messageData.extendedTextMessageData?.text || '';
+                } else if (typeMessage === 'imageMessage') {
+                    textMessage = messageData.fileMessageData?.caption || '🖼️ [ফটো এসেছে]';
+                    fileUrl = messageData.fileMessageData?.downloadUrl || '';
+                } else if (typeMessage === 'videoMessage') {
+                    textMessage = messageData.fileMessageData?.caption || '🎥 [ভিডিও এসেছে]';
+                    fileUrl = messageData.fileMessageData?.downloadUrl || '';
+                } else if (typeMessage === 'documentMessage') {
+                    textMessage = '📁 [ফাইল/ডকুমেন্ট এসেছে]';
+                    fileUrl = messageData.fileMessageData?.downloadUrl || '';
+                } else {
+                    textMessage = `[অন্যান্য মিডিয়া: ${typeMessage}]`;
+                }
+
+                // টেলিগ্রামের জন্য মেসেজ ফরম্যাট করা
+                let telegramText = `📩 *হোয়াটসঅ্যাপ থেকে মেসেজ*\n\n👤 *প্রেরক:* ${senderName}\n💬 *মেসেজ:* ${textMessage}`;
+                
+                if (fileUrl) {
+                    telegramText += `\n\n🔗 *মিডিয়া ফাইল লিঙ্ক:* ${fileUrl}`;
+                }
+
+                telegramText += `\n\n---\n*রিপ্লাই দিতে এই মেসেজের ওপর Reply করুন।*`;
+
+                // ছবি বা ভিডিও থাকলে মিডিয়াসহ পাঠানো, অন্যথায় নরমাল টেক্সট
+                if (typeMessage === 'imageMessage' && fileUrl) {
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+                        chat_id: TELEGRAM_CHAT_ID,
+                        photo: fileUrl,
+                        caption: telegramText,
+                        parse_mode: 'Markdown'
+                    });
+                } else if (typeMessage === 'videoMessage' && fileUrl) {
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+                        chat_id: TELEGRAM_CHAT_ID,
+                        video: fileUrl,
+                        caption: telegramText,
+                        parse_mode: 'Markdown'
+                    });
+                } else {
+                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                        chat_id: TELEGRAM_CHAT_ID,
+                        text: telegramText,
+                        parse_mode: 'Markdown'
+                    });
+                }
             }
-
-            const telegramText = `📩 *নতুন হোয়াটসঅ্যাপ মেসেজ*\n\n👤 *প্রেরক:* ${senderName}\n📱 *নম্বর:* ${senderPhone}\n🆔 *Chat ID:* \`${chatId}\`\n\n💬 *মেসেজ:* ${textMessage}\n\n--- \n*রিপ্লাই দিতে এই মেসেজের ওপর Reply করুন।*`;
-
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                chat_id: TELEGRAM_CHAT_ID,
-                text: telegramText,
-                parse_mode: 'Markdown'
-            });
         }
 
         res.status(200).send('OK');
@@ -47,37 +89,52 @@ app.post('/webhook', async (req, res) => {
     }
 });
 
-// ২. টেলিগ্রাম থেকে উত্তর (Reply) গ্রহণ এবং হোয়াটসঅ্যাপে পাঠানো (Telegram Webhook)
+// ২. টেলিগ্রাম থেকে উত্তর (Reply) গ্রহণ এবং হোয়াটসঅ্যাপে টেক্সট/মিডিয়া পাঠানো (Telegram Webhook)
 app.post('/telegram-webhook', async (req, res) => {
     try {
         const body = req.body;
 
         if (body.message && body.message.reply_to_message) {
-            const replyText = body.message.text;
-            const originalText = body.message.reply_to_message.text || '';
+            const replyMsg = body.message;
 
-            // অরিজিনাল মেসেজ থেকে Chat ID খুঁজে বের করা
-            const match = originalText.match(/Chat ID:\s*([^\s\n]+)/);
-
-            if (match && match[1]) {
-                const waChatId = match[1];
-
-                // Green-API ব্যবহার করে হোয়াটসঅ্যাপে উত্তর পাঠানো
+            // ১. উত্তর যদি টেক্সট হয়
+            if (replyMsg.text) {
                 await axios.post(
                     `https://7107.api.greenapi.com/waInstance${GREEN_API_INSTANCE}/sendMessage/${GREEN_API_TOKEN}`,
                     {
-                        chatId: waChatId,
-                        message: replyText
+                        chatId: TARGET_CHAT_ID,
+                        message: replyMsg.text
                     }
                 );
-
-                // টেলিগ্রামে কনফার্মেশন পাঠানো
-                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                    chat_id: TELEGRAM_CHAT_ID,
-                    text: `✅ *হোয়াটসঅ্যাপে মেসেজ পাঠানো হয়েছে!*`,
-                    parse_mode: 'Markdown'
-                });
             }
+            // ২. উত্তর যদি ফটো/ছবি হয়
+            else if (replyMsg.photo) {
+                const photoArray = replyMsg.photo;
+                const fileId = photoArray[photoArray.length - 1].file_id; // সর্বোচ্চ রেজোলিউশনের ছবি
+                
+                // টেলিগ্রাম ফাইল ইউআরএল বের করা
+                const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+                const filePath = fileRes.data.result.file_path;
+                const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
+
+                // Green-API দিয়ে ছবি পাঠানো
+                await axios.post(
+                    `https://7107.api.greenapi.com/waInstance${GREEN_API_INSTANCE}/sendFileByUrl/${GREEN_API_TOKEN}`,
+                    {
+                        chatId: TARGET_CHAT_ID,
+                        urlFile: fileUrl,
+                        fileName: 'photo.jpg',
+                        caption: replyMsg.caption || ''
+                    }
+                );
+            }
+
+            // টেলিগ্রামে কনফার্মেশন পাঠানো
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                chat_id: TELEGRAM_CHAT_ID,
+                text: `✅ *হোয়াটসঅ্যাপে (${TARGET_CHAT_ID}) মেসেজ/মিডিয়া পাঠানো হয়েছে!*`,
+                parse_mode: 'Markdown'
+            });
         }
 
         res.status(200).send('OK');
