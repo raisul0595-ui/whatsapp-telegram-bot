@@ -7,19 +7,18 @@ app.use(express.json());
 // কনফিগারেশন
 const TELEGRAM_BOT_TOKEN = '8851831421:AAE3tYukLT-0QEdsu_eUKypBkJHV80fyJGc';
 const TELEGRAM_CHAT_ID = '7512451863';
-
-// Green-API Credentials (আপনার স্ক্রিনশট থেকে প্রাপ্ত)
-const GREEN_API_ID = '710722717180';
+const GREEN_API_INSTANCE = '710722717180';
 const GREEN_API_TOKEN = '19e72b9645c84018832f389d59c977241f149e7528404831b8';
 
-// ১. WhatsApp থেকে আসা মেসেজ Telegram-এ পাঠানোর ওয়েবহুক
+// ১. হোয়াটসঅ্যাপ থেকে ইনকামিং মেসেজ গ্রহণ (Green-API Webhook)
 app.post('/webhook', async (req, res) => {
     try {
         const body = req.body;
 
         if (body.typeWebhook === 'incomingMessageReceived') {
             const senderName = body.senderData?.senderName || 'অজানা ব্যক্তি';
-            const senderPhone = body.senderData?.sender || ''; // এটি হোয়াটসঅ্যাপ চ্যাট আইডি (যেমন: 88017xxxx@c.us)
+            const senderPhone = body.senderData?.sender || '';
+            const chatId = body.senderData?.chatId || '';
             const messageData = body.messageData;
 
             let textMessage = '';
@@ -32,8 +31,7 @@ app.post('/webhook', async (req, res) => {
                 textMessage = `[মিডিয়া/ফাইল: ${messageData.typeMessage}]`;
             }
 
-            // টেলিগ্রামে পাঠানোর মেসেজ ফরম্যাট (প্রেরকের নম্বরটি সেভ করে রাখা হচ্ছে যাতে রিপ্লাই দিলে বোঝা যায়)
-            const telegramText = `📩 *WhatsApp Message*\n👤 *From:* ${senderName}\n📞 *ChatID:* \`${senderPhone}\`\n\n💬 *Message:* ${textMessage}`;
+            const telegramText = `📩 *নতুন হোয়াটসঅ্যাপ মেসেজ*\n\n👤 *প্রেরক:* ${senderName}\n📱 *নম্বর:* ${senderPhone}\n🆔 *Chat ID:* \`${chatId}\`\n\n💬 *মেসেজ:* ${textMessage}\n\n--- \n*রিপ্লাই দিতে এই মেসেজের ওপর Reply করুন।*`;
 
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
                 chat_id: TELEGRAM_CHAT_ID,
@@ -44,48 +42,47 @@ app.post('/webhook', async (req, res) => {
 
         res.status(200).send('OK');
     } catch (error) {
-        console.error('Webhook Error:', error.message);
+        console.error('Error handling WhatsApp webhook:', error.message);
         res.status(500).send('Error');
     }
 });
 
-// ২. Telegram থেকে মেসেজ দিয়ে WhatsApp-এ রিপ্লাই পাঠানোর লজিক (Telegram Bot Update Listener)
+// ২. টেলিগ্রাম থেকে উত্তর (Reply) গ্রহণ এবং হোয়াটসঅ্যাপে পাঠানো (Telegram Webhook)
 app.post('/telegram-webhook', async (req, res) => {
     try {
-        const update = req.body;
+        const body = req.body;
 
-        if (update.message && update.message.text) {
-            const chatId = update.message.chat.id;
-            const text = update.message.text;
+        if (body.message && body.message.reply_to_message) {
+            const replyText = body.message.text;
+            const originalText = body.message.reply_to_message.text || '';
 
-            // শুধু নির্দিষ্ট আপনার টেলিগ্রাম চ্যাট আইডি থেকে মেসেজ গ্রহণ করবে
-            if (chatId.toString() === TELEGRAM_CHAT_ID) {
-                // ফরম্যাট চেক করার জন্য: টেলিগ্রামে মেসেজ দেওয়ার সময় প্রথমে হোয়াটসঅ্যাপ নম্বর বা চ্যাট আইডি দিতে হবে, তারপর স্পেস দিয়ে মেসেজ।
-                // অথবা সহজ করার জন্য আপনি চাইলে সরাসরি কোডে নির্দিষ্ট কোনো নম্বরে পাঠাতে পারেন।
-                // উদাহরণস্বরূপ ফরম্যাট: 88017XXXXXXXX@c.us আপনার_মেসেজ
-                const parts = text.split(' ');
-                const recipientWhatsAppChatId = parts[0]; // যেমন: 8801724220595@c.us
-                const messageBody = parts.slice(1).join(' ');
+            // অরিজিনাল মেসেজ থেকে Chat ID খুঁজে বের করা
+            const match = originalText.match(/Chat ID:\s*([^\s\n]+)/);
 
-                if (recipientWhatsAppChatId && messageBody) {
-                    // Green-API ব্যবহার করে WhatsApp-এ মেসেজ পাঠানো
-                    await axios.post(`https://7107.api.greenapi.com/waInstance${GREEN_API_ID}/sendMessage/${GREEN_API_TOKEN}`, {
-                        chatId: recipientWhatsAppChatId,
-                        message: messageBody
-                    });
+            if (match && match[1]) {
+                const waChatId = match[1];
 
-                    // সফল হলে টেলিগ্রামে কনফার্মেশন পাঠানো
-                    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                        chat_id: TELEGRAM_CHAT_ID,
-                        text: `✅ হোয়াটসঅ্যাপে মেসেজ পাঠানো হয়েছে!`
-                    });
-                }
+                // Green-API ব্যবহার করে হোয়াটসঅ্যাপে উত্তর পাঠানো
+                await axios.post(
+                    `https://7107.api.greenapi.com/waInstance${GREEN_API_INSTANCE}/sendMessage/${GREEN_API_TOKEN}`,
+                    {
+                        chatId: waChatId,
+                        message: replyText
+                    }
+                );
+
+                // টেলিগ্রামে কনফার্মেশন পাঠানো
+                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                    chat_id: TELEGRAM_CHAT_ID,
+                    text: `✅ *হোয়াটসঅ্যাপে মেসেজ পাঠানো হয়েছে!*`,
+                    parse_mode: 'Markdown'
+                });
             }
         }
 
         res.status(200).send('OK');
     } catch (error) {
-        console.error('Telegram Webhook Error:', error.message);
+        console.error('Error handling Telegram webhook:', error.message);
         res.status(500).send('Error');
     }
 });
